@@ -1,0 +1,292 @@
+name: OpenWrt A53 Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Upstream tag to build (e.g. v1.13.9, or v1.13.18-extended-2.6.5)"
+        required: true
+        type: string
+      type:
+        description: "Core type (auto, official, extended)"
+        required: true
+        type: choice
+        options:
+          - auto
+          - official
+          - extended
+        default: auto
+      create_release:
+        description: "Create or update GitHub Release"
+        required: true
+        type: boolean
+        default: true
+
+concurrency:
+  group: openwrt-a53-${{ inputs.tag }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build OpenWrt A53
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.6
+          cache: false
+
+      - name: Resolve Tag and Checkout
+        id: resolve_tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -xeuo pipefail
+
+          TAG_NAME="${{ inputs.tag }}"
+          if [[ "$TAG_NAME" != v* ]]; then
+            TAG_NAME="v${TAG_NAME}"
+          fi
+
+          VERSION="${TAG_NAME#v}"
+          PKG_VERSION="${VERSION//-/\~}"
+
+          CORE_TYPE="${{ inputs.type }}"
+          if [ "$CORE_TYPE" = "auto" ] || [ -z "$CORE_TYPE" ]; then
+            if [[ "$TAG_NAME" == *extended* ]]; then
+              CORE_TYPE="extended"
+            else
+              CORE_TYPE="official"
+            fi
+          fi
+
+          echo "CORE_TYPE=${CORE_TYPE}" >> "$GITHUB_ENV"
+          echo "core_type=${CORE_TYPE}" >> "$GITHUB_OUTPUT"
+          echo "TAG_NAME=${TAG_NAME}" >> "$GITHUB_ENV"
+          echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "PKG_VERSION=${PKG_VERSION}" >> "$GITHUB_ENV"
+
+          if [ "$CORE_TYPE" = "extended" ]; then
+            UPSTREAM_REPO="Shtorm-7/sing-box-extended"
+            git fetch --tags https://github.com/Shtorm-7/sing-box-extended.git
+          else
+            UPSTREAM_REPO="sagernet/sing-box"
+            git fetch --tags https://github.com/sagernet/sing-box.git
+          fi
+
+          git checkout "refs/tags/${TAG_NAME}" || git checkout "${TAG_NAME}"
+
+          IS_PRERELEASE="false"
+          UPSTREAM_JSON=$(gh api "repos/${UPSTREAM_REPO}/releases/tags/${TAG_NAME}" 2>/dev/null || true)
+          if [ -n "$UPSTREAM_JSON" ]; then
+            IS_PRERELEASE=$(echo "$UPSTREAM_JSON" | jq -r '.prerelease // false')
+          else
+            if [[ "$TAG_NAME" =~ -(alpha|beta|rc|dev|pre) ]]; then
+              IS_PRERELEASE="true"
+            fi
+          fi
+
+          echo "IS_PRERELEASE=${IS_PRERELEASE}" >> "$GITHUB_ENV"
+          echo "is_prerelease=${IS_PRERELEASE}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Go modules
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/go/pkg/mod
+          key: go-mod-linux-${{ hashFiles('go.sum') }}
+          restore-keys: go-mod-linux-
+
+      - name: Cache Go tool builds
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build-tools-linux-${{ hashFiles('go.sum') }}
+          restore-keys: go-build-tools-linux-
+
+      - name: Clone cronet-go
+        run: |
+          set -xeuo pipefail
+          CRONET_GO_VERSION=$(cat .github/CRONET_GO_VERSION)
+          git init ~/cronet-go
+          git -C ~/cronet-go remote add origin https://github.com/sagernet/cronet-go.git
+          git -C ~/cronet-go sparse-checkout set --no-cone '/*' '!/lib'
+          git -C ~/cronet-go fetch --depth=1 --filter=blob:none origin "$CRONET_GO_VERSION"
+          git -C ~/cronet-go checkout FETCH_HEAD
+          git -C ~/cronet-go submodule update --init --recursive --depth=1
+
+      - name: Regenerate Debian keyring
+        run: |
+          set -xeuo pipefail
+          rm -f ~/cronet-go/naiveproxy/src/build/linux/sysroot_scripts/keyring.gpg
+          cd ~/cronet-go
+          GPG_TTY=/dev/null ./naiveproxy/src/build/linux/sysroot_scripts/generate_keyring.sh
+
+      - name: Cache Chromium toolchain
+        id: cache-chromium-toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/cronet-go/naiveproxy/src/third_party/llvm-build/
+            ~/cronet-go/naiveproxy/src/gn/out/
+            ~/cronet-go/naiveproxy/src/chrome/build/pgo_profiles/
+            ~/cronet-go/naiveproxy/src/out/sysroot-build/
+          key: chromium-toolchain-arm64-musl-${{ hashFiles('.github/CRONET_GO_VERSION') }}
+
+      - name: Download Chromium toolchain
+        run: |
+          set -xeuo pipefail
+          cd ~/cronet-go
+          go run ./cmd/build-naive --target=linux/arm64 --libc=musl download-toolchain
+
+      - name: Set Chromium toolchain environment
+        run: |
+          set -xeuo pipefail
+          cd ~/cronet-go
+          go run ./cmd/build-naive --target=linux/arm64 --libc=musl env >> $GITHUB_ENV
+
+      - name: Build binary
+        run: |
+          set -xeuo pipefail
+          mkdir -p dist
+          LDFLAGS_SHARED=$(cat release/LDFLAGS 2>/dev/null || echo "")
+
+          if [ "$CORE_TYPE" = "extended" ]; then
+            TAGS="with_quic,with_utls,with_naive_outbound,badlinkname,tfogo_checklinkname0,with_musl"
+          else
+            TAGS="with_quic,with_naive_outbound,badlinkname,tfogo_checklinkname0,with_musl"
+          fi
+
+          go build -v -trimpath -o dist/sing-box \
+            -tags "${TAGS}" \
+            -ldflags "-X 'github.com/sagernet/sing-box/constant.Version=${VERSION}' ${LDFLAGS_SHARED} -s -w -buildid=" \
+            ./cmd/sing-box
+        env:
+          CGO_ENABLED: "1"
+          GOOS: linux
+          GOARCH: arm64
+
+      - name: Package OpenWrt IPK
+        run: |
+          set -xeuo pipefail
+          sudo gem install fpm
+          cp .fpm_openwrt .fpm 2>/dev/null || true
+
+          if [ "$CORE_TYPE" = "extended" ]; then
+            IPK_NAME="sing-box-extended.ipk"
+          else
+            IPK_NAME="sing-box.ipk"
+          fi
+
+          fpm -t deb \
+            -v "$PKG_VERSION" \
+            -p "dist/openwrt.deb" \
+            --architecture all \
+            dist/sing-box=/usr/bin/sing-box
+          .github/deb2ipk.sh "aarch64_cortex-a53" "dist/openwrt.deb" "dist/${IPK_NAME}"
+          rm -f "dist/openwrt.deb"
+
+      - name: Install apk-tools
+        run: |
+          docker run --rm -v /usr/local/bin:/mnt alpine:edge sh -c "apk add --no-cache apk-tools-static && cp /sbin/apk.static /mnt/apk && chmod +x /mnt/apk"
+
+      - name: Package OpenWrt APK
+        run: |
+          set -xeuo pipefail
+          if [ "$CORE_TYPE" = "extended" ]; then
+            APK_NAME="sing-box-extended.apk"
+          else
+            APK_NAME="sing-box.apk"
+          fi
+
+          .github/build_openwrt_apk.sh \
+            "aarch64_cortex-a53" \
+            "${VERSION}" \
+            "dist/sing-box" \
+            "dist/${APK_NAME}"
+
+      - name: Cleanup binary
+        run: |
+          rm -f dist/sing-box
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sing-box-openwrt-a53-${{ env.TAG_NAME }}
+          path: dist/*
+
+      - name: Publish GitHub Release
+        if: inputs.create_release != false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -xeuo pipefail
+
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            STATUS_TEXT="Pre-release / Release Candidate"
+            RELEASE_FLAGS=(--prerelease)
+          else
+            STATUS_TEXT="Stable"
+            RELEASE_FLAGS=()
+          fi
+
+          if [ "$CORE_TYPE" = "extended" ]; then
+            IPK_NAME="sing-box-extended.ipk"
+            APK_NAME="sing-box-extended.apk"
+            RELEASE_TITLE="sing-box-extended ${VERSION}"
+            NOTES="Automated build of sing-box-extended for OpenWrt (ARM64 Cortex-A53).\n\n**Upstream Tag:** \`${TAG_NAME}\` (${STATUS_TEXT})\n**Protocols & Features:** NaiveProxy, Hysteria 2, Full VLESS (with REALITY & uTLS), XHTTP.\n**Build Tags:** \`with_quic,with_utls,with_naive_outbound,badlinkname,tfogo_checklinkname0\`\n\n**Permanent direct download links:**\n- [sing-box-extended.ipk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box-extended.ipk)\n- [sing-box-extended.apk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box-extended.apk)"
+          else
+            IPK_NAME="sing-box.ipk"
+            APK_NAME="sing-box.apk"
+            RELEASE_TITLE="sing-box ${VERSION}"
+            NOTES="Automated build of sing-box (Official) for OpenWrt (ARM64 Cortex-A53).\n\n**Upstream Tag:** \`${TAG_NAME}\` (${STATUS_TEXT})\n**Build Tags:** \`with_quic,with_naive_outbound,badlinkname,tfogo_checklinkname0\`\n\n**Permanent direct download links:**\n- [sing-box.ipk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box.ipk)\n- [sing-box.apk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box.apk)"
+          fi
+
+          # 1. Create or update ONLY the 2 files for the version release
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Updating existing release $TAG_NAME (prerelease=${IS_PRERELEASE})..."
+            if [ "$IS_PRERELEASE" = "true" ]; then
+              gh release edit "$TAG_NAME" --prerelease
+            else
+              gh release edit "$TAG_NAME" --prerelease=false
+            fi
+            gh release upload "$TAG_NAME" "dist/${IPK_NAME}" "dist/${APK_NAME}" --clobber
+          else
+            echo "Creating new release $TAG_NAME (prerelease=${IS_PRERELEASE})..."
+            gh release create "$TAG_NAME" \
+              "dist/${IPK_NAME}" \
+              "dist/${APK_NAME}" \
+              --title "$RELEASE_TITLE" \
+              --notes "$(printf '%b' "$NOTES")" \
+              "${RELEASE_FLAGS[@]}"
+          fi
+
+          # 2. Overwrite files in the dedicated 'latest' release (for stable builds)
+          if [ "$IS_PRERELEASE" = "false" ]; then
+            STATIC_TAG="latest"
+            LATEST_NOTES="Latest automated OpenWrt A53 builds for official sing-box and sing-box-extended.\n\n**Direct download links:**\n- Official: [sing-box.ipk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box.ipk) | [sing-box.apk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box.apk)\n- Extended: [sing-box-extended.ipk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box-extended.ipk) | [sing-box-extended.apk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box-extended.apk)"
+
+            if ! gh release view "$STATIC_TAG" >/dev/null 2>&1; then
+              git tag -f "$STATIC_TAG"
+              git push -f origin "$STATIC_TAG" || true
+              gh release create "$STATIC_TAG" \
+                "dist/${IPK_NAME}" \
+                "dist/${APK_NAME}" \
+                --title "Latest OpenWrt A53 Builds" \
+                --notes "$(printf '%b' "$LATEST_NOTES")" \
+                --prerelease=false || true
+            else
+              gh release upload "$STATIC_TAG" "dist/${IPK_NAME}" "dist/${APK_NAME}" --clobber || true
+              gh release edit "$STATIC_TAG" --notes "$(printf '%b' "$LATEST_NOTES")" || true
+            fi
+          fi

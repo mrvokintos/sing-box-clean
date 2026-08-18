@@ -1,0 +1,148 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: "0 4 * * *" # Runs daily at 04:00 UTC
+  workflow_dispatch:
+    inputs:
+      sync_official:
+        description: "Sync official sagernet/sing-box"
+        required: true
+        type: boolean
+        default: true
+      sync_extended:
+        description: "Sync Shtorm-7/sing-box-extended"
+        required: true
+        type: boolean
+        default: true
+      trigger_build_latest:
+        description: "Trigger build for latest tags even if no new tags found"
+        required: true
+        type: boolean
+        default: false
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  sync:
+    name: Sync with Upstreams
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Orchestrator Branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Sync Official sing-box
+        id: sync_official
+        if: inputs.sync_official != false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -xeuo pipefail
+          EXISTING_TAGS=$(git tag -l)
+
+          git remote add upstream-official https://github.com/sagernet/sing-box.git || git remote set-url upstream-official https://github.com/sagernet/sing-box.git
+          git fetch upstream-official --tags
+          git fetch upstream-official testing
+
+          NEW_OFFICIAL_TAGS=()
+          for tag in $(git tag -l "v*"); do
+            if [[ "$tag" != *extended* ]] && ! echo "$EXISTING_TAGS" | grep -qx "$tag"; then
+              NEW_OFFICIAL_TAGS+=("$tag")
+            fi
+          done
+
+          # Fast-forward push testing branch without any local merge commits
+          git push origin upstream-official/testing:refs/heads/testing || true
+          git push origin --tags || true
+
+          echo "New official tags count: ${#NEW_OFFICIAL_TAGS[@]}"
+          if [ "${#NEW_OFFICIAL_TAGS[@]}" -gt 0 ]; then
+            echo "new_tags=${NEW_OFFICIAL_TAGS[*]}" >> "$GITHUB_OUTPUT"
+            echo "has_new_tags=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_new_tags=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sync sing-box-extended
+        id: sync_extended
+        if: inputs.sync_extended != false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -xeuo pipefail
+          EXISTING_TAGS=$(git tag -l)
+
+          git remote add upstream-extended https://github.com/Shtorm-7/sing-box-extended.git || git remote set-url upstream-extended https://github.com/Shtorm-7/sing-box-extended.git
+          git fetch upstream-extended --tags
+          git fetch upstream-extended extended
+
+          NEW_EXTENDED_TAGS=()
+          for tag in $(git tag -l "v*extended*"); do
+            if ! echo "$EXISTING_TAGS" | grep -qx "$tag"; then
+              NEW_EXTENDED_TAGS+=("$tag")
+            fi
+          done
+
+          # Fast-forward push extended branch without any local merge commits
+          git push origin upstream-extended/extended:refs/heads/extended || true
+          git push origin --tags || true
+
+          echo "New extended tags count: ${#NEW_EXTENDED_TAGS[@]}"
+          if [ "${#NEW_EXTENDED_TAGS[@]}" -gt 0 ]; then
+            echo "new_tags=${NEW_EXTENDED_TAGS[*]}" >> "$GITHUB_OUTPUT"
+            echo "has_new_tags=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_new_tags=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Trigger Builds for New Official Tags
+        if: steps.sync_official.outputs.has_new_tags == 'true' || inputs.trigger_build_latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -xeuo pipefail
+          if [ "${{ steps.sync_official.outputs.has_new_tags }}" = "true" ]; then
+            for tag in ${{ steps.sync_official.outputs.new_tags }}; do
+              echo "Triggering Official build for new tag: $tag"
+              gh workflow run openwrt-a53.yml --ref clean -f tag="$tag" -f type=official || true
+            done
+          elif [ "${{ inputs.trigger_build_latest }}" = "true" ]; then
+            LATEST_OFFICIAL_TAG=$(git tag -l "v*" | grep -v "extended" | sort -V | tail -n 1)
+            if [ -n "$LATEST_OFFICIAL_TAG" ]; then
+              echo "Triggering Official build for latest tag: $LATEST_OFFICIAL_TAG"
+              gh workflow run openwrt-a53.yml --ref clean -f tag="$LATEST_OFFICIAL_TAG" -f type=official || true
+            fi
+          fi
+
+      - name: Trigger Builds for New Extended Tags
+        if: steps.sync_extended.outputs.has_new_tags == 'true' || inputs.trigger_build_latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -xeuo pipefail
+          if [ "${{ steps.sync_extended.outputs.has_new_tags }}" = "true" ]; then
+            for tag in ${{ steps.sync_extended.outputs.new_tags }}; do
+              echo "Triggering Extended build for new tag: $tag"
+              gh workflow run openwrt-a53.yml --ref clean -f tag="$tag" -f type=extended || true
+            done
+          elif [ "${{ inputs.trigger_build_latest }}" = "true" ]; then
+            LATEST_EXTENDED_TAG=$(git tag -l "v*extended*" | sort -V | tail -n 1)
+            if [ -n "$LATEST_EXTENDED_TAG" ]; then
+              echo "Triggering Extended build for latest tag: $LATEST_EXTENDED_TAG"
+              gh workflow run openwrt-a53.yml --ref clean -f tag="$LATEST_EXTENDED_TAG" -f type=extended || true
+            fi
+          fi
