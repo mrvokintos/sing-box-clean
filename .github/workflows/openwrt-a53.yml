@@ -85,22 +85,26 @@ jobs:
             git fetch --tags https://github.com/sagernet/sing-box.git
           fi
 
-          git checkout "refs/tags/${TAG_NAME}" || git checkout "${TAG_NAME}"
-
           IS_PRERELEASE="false"
           UPSTREAM_JSON=$(gh api "repos/${UPSTREAM_REPO}/releases/tags/${TAG_NAME}" 2>/dev/null || true)
           if [ -n "$UPSTREAM_JSON" ]; then
             IS_PRERELEASE=$(echo "$UPSTREAM_JSON" | jq -r '.prerelease // false')
-          else
-            if [[ "$TAG_NAME" =~ -(alpha|beta|rc|dev|pre) ]]; then
-              IS_PRERELEASE="true"
-            fi
           fi
 
-          echo "IS_PRERELEASE=${IS_PRERELEASE}" >> "$GITHUB_ENV"
-          echo "is_prerelease=${IS_PRERELEASE}" >> "$GITHUB_OUTPUT"
+          if [[ "$TAG_NAME" =~ -(alpha|beta|rc|dev|pre) ]]; then
+            IS_PRERELEASE="true"
+          fi
+
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            echo "::warning::Tag $TAG_NAME is a pre-release (alpha/beta/rc). Skipping build because only stable releases are built."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          else
+            git checkout "refs/tags/${TAG_NAME}" || git checkout "${TAG_NAME}"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Cache Go modules
+        if: steps.resolve_tag.outputs.should_build == 'true'
         uses: actions/cache/restore@v4
         with:
           path: ~/go/pkg/mod
@@ -108,6 +112,7 @@ jobs:
           restore-keys: go-mod-linux-
 
       - name: Cache Go tool builds
+        if: steps.resolve_tag.outputs.should_build == 'true'
         uses: actions/cache/restore@v4
         with:
           path: ~/.cache/go-build
@@ -115,6 +120,7 @@ jobs:
           restore-keys: go-build-tools-linux-
 
       - name: Clone cronet-go
+        if: steps.resolve_tag.outputs.should_build == 'true'
         run: |
           set -xeuo pipefail
           CRONET_GO_VERSION=$(cat .github/CRONET_GO_VERSION)
@@ -126,6 +132,7 @@ jobs:
           git -C ~/cronet-go submodule update --init --recursive --depth=1
 
       - name: Regenerate Debian keyring
+        if: steps.resolve_tag.outputs.should_build == 'true'
         run: |
           set -xeuo pipefail
           rm -f ~/cronet-go/naiveproxy/src/build/linux/sysroot_scripts/keyring.gpg
@@ -133,6 +140,7 @@ jobs:
           GPG_TTY=/dev/null ./naiveproxy/src/build/linux/sysroot_scripts/generate_keyring.sh
 
       - name: Cache Chromium toolchain
+        if: steps.resolve_tag.outputs.should_build == 'true'
         id: cache-chromium-toolchain
         uses: actions/cache@v4
         with:
@@ -144,18 +152,21 @@ jobs:
           key: chromium-toolchain-arm64-musl-${{ hashFiles('.github/CRONET_GO_VERSION') }}
 
       - name: Download Chromium toolchain
+        if: steps.resolve_tag.outputs.should_build == 'true'
         run: |
           set -xeuo pipefail
           cd ~/cronet-go
           go run ./cmd/build-naive --target=linux/arm64 --libc=musl download-toolchain
 
       - name: Set Chromium toolchain environment
+        if: steps.resolve_tag.outputs.should_build == 'true'
         run: |
           set -xeuo pipefail
           cd ~/cronet-go
           go run ./cmd/build-naive --target=linux/arm64 --libc=musl env >> $GITHUB_ENV
 
       - name: Build binary
+        if: steps.resolve_tag.outputs.should_build == 'true'
         run: |
           set -xeuo pipefail
           mkdir -p dist
@@ -177,6 +188,7 @@ jobs:
           GOARCH: arm64
 
       - name: Package OpenWrt IPK
+        if: steps.resolve_tag.outputs.should_build == 'true'
         run: |
           set -xeuo pipefail
           sudo gem install fpm
@@ -197,10 +209,12 @@ jobs:
           rm -f "dist/openwrt.deb"
 
       - name: Install apk-tools
+        if: steps.resolve_tag.outputs.should_build == 'true'
         run: |
           docker run --rm -v /usr/local/bin:/mnt alpine:edge sh -c "apk add --no-cache apk-tools-static && cp /sbin/apk.static /mnt/apk && chmod +x /mnt/apk"
 
       - name: Package OpenWrt APK
+        if: steps.resolve_tag.outputs.should_build == 'true'
         run: |
           set -xeuo pipefail
           if [ "$CORE_TYPE" = "extended" ]; then
@@ -218,73 +232,58 @@ jobs:
           rm -f dist/sing-box
 
       - name: Upload Artifacts
+        if: steps.resolve_tag.outputs.should_build == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: sing-box-openwrt-a53-${{ env.TAG_NAME }}
           path: dist/*
 
       - name: Publish GitHub Release
-        if: inputs.create_release != false
+        if: steps.resolve_tag.outputs.should_build == 'true' && inputs.create_release != false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -xeuo pipefail
 
-          if [ "$IS_PRERELEASE" = "true" ]; then
-            STATUS_TEXT="Pre-release / Release Candidate"
-            RELEASE_FLAGS=(--prerelease)
-          else
-            STATUS_TEXT="Stable"
-            RELEASE_FLAGS=()
-          fi
-
           if [ "$CORE_TYPE" = "extended" ]; then
             IPK_NAME="sing-box-extended.ipk"
             APK_NAME="sing-box-extended.apk"
             RELEASE_TITLE="sing-box-extended ${VERSION}"
-            NOTES="Automated build of sing-box-extended for OpenWrt (ARM64 Cortex-A53).\n\n**Upstream Tag:** \`${TAG_NAME}\` (${STATUS_TEXT})\n**Protocols & Features:** NaiveProxy, Hysteria 2, Full VLESS (with REALITY & uTLS), XHTTP.\n**Build Tags:** \`with_quic,with_utls,with_naive_outbound,badlinkname,tfogo_checklinkname0\`\n\n**Permanent direct download links:**\n- [sing-box-extended.ipk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box-extended.ipk)\n- [sing-box-extended.apk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box-extended.apk)"
+            NOTES="Automated build of sing-box-extended for OpenWrt (ARM64 Cortex-A53).\n\n**Upstream Tag:** \`${TAG_NAME}\` (Stable)\n**Protocols & Features:** NaiveProxy, Hysteria 2, Full VLESS (with REALITY & uTLS), XHTTP.\n**Build Tags:** \`with_quic,with_utls,with_naive_outbound,badlinkname,tfogo_checklinkname0\`\n\n**Permanent direct download links:**\n- [sing-box-extended.ipk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box-extended.ipk)\n- [sing-box-extended.apk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box-extended.apk)"
           else
             IPK_NAME="sing-box.ipk"
             APK_NAME="sing-box.apk"
             RELEASE_TITLE="sing-box ${VERSION}"
-            NOTES="Automated build of sing-box (Official) for OpenWrt (ARM64 Cortex-A53).\n\n**Upstream Tag:** \`${TAG_NAME}\` (${STATUS_TEXT})\n**Build Tags:** \`with_quic,with_naive_outbound,badlinkname,tfogo_checklinkname0\`\n\n**Permanent direct download links:**\n- [sing-box.ipk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box.ipk)\n- [sing-box.apk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box.apk)"
+            NOTES="Automated build of sing-box (Official) for OpenWrt (ARM64 Cortex-A53).\n\n**Upstream Tag:** \`${TAG_NAME}\` (Stable)\n**Build Tags:** \`with_quic,with_naive_outbound,badlinkname,tfogo_checklinkname0\`\n\n**Permanent direct download links:**\n- [sing-box.ipk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box.ipk)\n- [sing-box.apk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box.apk)"
           fi
 
           # 1. Create or update ONLY the 2 files for the version release
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            echo "Updating existing release $TAG_NAME (prerelease=${IS_PRERELEASE})..."
-            if [ "$IS_PRERELEASE" = "true" ]; then
-              gh release edit "$TAG_NAME" --prerelease
-            else
-              gh release edit "$TAG_NAME" --prerelease=false
-            fi
+            gh release edit "$TAG_NAME" --prerelease=false
             gh release upload "$TAG_NAME" "dist/${IPK_NAME}" "dist/${APK_NAME}" --clobber
           else
-            echo "Creating new release $TAG_NAME (prerelease=${IS_PRERELEASE})..."
             gh release create "$TAG_NAME" \
               "dist/${IPK_NAME}" \
               "dist/${APK_NAME}" \
               --title "$RELEASE_TITLE" \
               --notes "$(printf '%b' "$NOTES")" \
-              "${RELEASE_FLAGS[@]}"
+              --prerelease=false
           fi
 
-          # 2. Overwrite files in the dedicated 'latest' release (for stable builds)
-          if [ "$IS_PRERELEASE" = "false" ]; then
-            STATIC_TAG="latest"
-            LATEST_NOTES="Latest automated OpenWrt A53 builds for official sing-box and sing-box-extended.\n\n**Direct download links:**\n- Official: [sing-box.ipk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box.ipk) | [sing-box.apk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box.apk)\n- Extended: [sing-box-extended.ipk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box-extended.ipk) | [sing-box-extended.apk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box-extended.apk)"
+          # 2. Overwrite files in the dedicated 'latest' release
+          STATIC_TAG="latest"
+          LATEST_NOTES="Latest automated OpenWrt A53 builds for official sing-box and sing-box-extended.\n\n**Direct download links:**\n- Official: [sing-box.ipk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box.ipk) | [sing-box.apk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box.apk)\n- Extended: [sing-box-extended.ipk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box-extended.ipk) | [sing-box-extended.apk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box-extended.apk)"
 
-            if ! gh release view "$STATIC_TAG" >/dev/null 2>&1; then
-              git tag -f "$STATIC_TAG"
-              git push -f origin "$STATIC_TAG" || true
-              gh release create "$STATIC_TAG" \
-                "dist/${IPK_NAME}" \
-                "dist/${APK_NAME}" \
-                --title "Latest OpenWrt A53 Builds" \
-                --notes "$(printf '%b' "$LATEST_NOTES")" \
-                --prerelease=false || true
-            else
-              gh release upload "$STATIC_TAG" "dist/${IPK_NAME}" "dist/${APK_NAME}" --clobber || true
-              gh release edit "$STATIC_TAG" --notes "$(printf '%b' "$LATEST_NOTES")" || true
-            fi
+          if ! gh release view "$STATIC_TAG" >/dev/null 2>&1; then
+            git tag -f "$STATIC_TAG"
+            git push -f origin "$STATIC_TAG" || true
+            gh release create "$STATIC_TAG" \
+              "dist/${IPK_NAME}" \
+              "dist/${APK_NAME}" \
+              --title "Latest OpenWrt A53 Builds" \
+              --notes "$(printf '%b' "$LATEST_NOTES")" \
+              --prerelease=false || true
+          else
+            gh release upload "$STATIC_TAG" "dist/${IPK_NAME}" "dist/${APK_NAME}" --clobber || true
+            gh release edit "$STATIC_TAG" --notes "$(printf '%b' "$LATEST_NOTES")" || true
           fi

@@ -16,7 +16,7 @@ on:
         type: boolean
         default: true
       trigger_build_latest:
-        description: "Trigger build for latest tags even if no new tags found"
+        description: "Trigger build for latest stable tags even if no new tags found"
         required: true
         type: boolean
         default: false
@@ -60,7 +60,8 @@ jobs:
 
           NEW_OFFICIAL_TAGS=()
           for tag in $(git tag -l "v*"); do
-            if [[ "$tag" != *extended* ]] && ! echo "$EXISTING_TAGS" | grep -qx "$tag"; then
+            # Filter strictly for stable tags: e.g. v1.13.9 (exclude -extended, -alpha, -beta, -rc, -dev, -pre)
+            if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && ! echo "$EXISTING_TAGS" | grep -qx "$tag"; then
               NEW_OFFICIAL_TAGS+=("$tag")
             fi
           done
@@ -69,7 +70,7 @@ jobs:
           git push origin upstream-official/testing:refs/heads/testing || true
           git push origin --tags || true
 
-          echo "New official tags count: ${#NEW_OFFICIAL_TAGS[@]}"
+          echo "New official stable tags count: ${#NEW_OFFICIAL_TAGS[@]}"
           if [ "${#NEW_OFFICIAL_TAGS[@]}" -gt 0 ]; then
             echo "new_tags=${NEW_OFFICIAL_TAGS[*]}" >> "$GITHUB_OUTPUT"
             echo "has_new_tags=true" >> "$GITHUB_OUTPUT"
@@ -92,7 +93,8 @@ jobs:
 
           NEW_EXTENDED_TAGS=()
           for tag in $(git tag -l "v*extended*"); do
-            if ! echo "$EXISTING_TAGS" | grep -qx "$tag"; then
+            # Filter strictly for stable tags: e.g. v1.13.18-extended-2.6.5 (exclude -rc, -alpha, -beta, -pre)
+            if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-extended-[0-9]+\.[0-9]+\.[0-9]+$ ]] && ! echo "$EXISTING_TAGS" | grep -qx "$tag"; then
               NEW_EXTENDED_TAGS+=("$tag")
             fi
           done
@@ -101,7 +103,7 @@ jobs:
           git push origin upstream-extended/extended:refs/heads/extended || true
           git push origin --tags || true
 
-          echo "New extended tags count: ${#NEW_EXTENDED_TAGS[@]}"
+          echo "New extended stable tags count: ${#NEW_EXTENDED_TAGS[@]}"
           if [ "${#NEW_EXTENDED_TAGS[@]}" -gt 0 ]; then
             echo "new_tags=${NEW_EXTENDED_TAGS[*]}" >> "$GITHUB_OUTPUT"
             echo "has_new_tags=true" >> "$GITHUB_OUTPUT"
@@ -117,13 +119,13 @@ jobs:
           set -xeuo pipefail
           if [ "${{ steps.sync_official.outputs.has_new_tags }}" = "true" ]; then
             for tag in ${{ steps.sync_official.outputs.new_tags }}; do
-              echo "Triggering Official build for new tag: $tag"
+              echo "Triggering Official build for new stable tag: $tag"
               gh workflow run openwrt-a53.yml --ref clean -f tag="$tag" -f type=official || true
             done
           elif [ "${{ inputs.trigger_build_latest }}" = "true" ]; then
-            LATEST_OFFICIAL_TAG=$(git tag -l "v*" | grep -v "extended" | sort -V | tail -n 1)
+            LATEST_OFFICIAL_TAG=$(git tag -l "v*" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
             if [ -n "$LATEST_OFFICIAL_TAG" ]; then
-              echo "Triggering Official build for latest tag: $LATEST_OFFICIAL_TAG"
+              echo "Triggering Official build for latest stable tag: $LATEST_OFFICIAL_TAG"
               gh workflow run openwrt-a53.yml --ref clean -f tag="$LATEST_OFFICIAL_TAG" -f type=official || true
             fi
           fi
@@ -136,13 +138,13 @@ jobs:
           set -xeuo pipefail
           if [ "${{ steps.sync_extended.outputs.has_new_tags }}" = "true" ]; then
             for tag in ${{ steps.sync_extended.outputs.new_tags }}; do
-              echo "Triggering Extended build for new tag: $tag"
+              echo "Triggering Extended build for new stable tag: $tag"
               gh workflow run openwrt-a53.yml --ref clean -f tag="$tag" -f type=extended || true
             done
           elif [ "${{ inputs.trigger_build_latest }}" = "true" ]; then
-            LATEST_EXTENDED_TAG=$(git tag -l "v*extended*" | sort -V | tail -n 1)
+            LATEST_EXTENDED_TAG=$(git tag -l "v*extended*" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-extended-[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
             if [ -n "$LATEST_EXTENDED_TAG" ]; then
-              echo "Triggering Extended build for latest tag: $LATEST_EXTENDED_TAG"
+              echo "Triggering Extended build for latest stable tag: $LATEST_EXTENDED_TAG"
               gh workflow run openwrt-a53.yml --ref clean -f tag="$LATEST_EXTENDED_TAG" -f type=extended || true
             fi
           fi
