@@ -215,8 +215,6 @@ jobs:
             "dist/sing-box" \
             "dist/${APK_NAME}"
 
-      - name: Cleanup binary
-        run: |
           rm -f dist/sing-box
 
       - name: Upload Artifacts
