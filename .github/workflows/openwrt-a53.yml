@@ -271,6 +271,7 @@ jobs:
               --title "$RELEASE_TITLE" \
               --notes "$(printf '%b' "$NOTES")" \
               --prerelease=false \
+              --latest=false \
               --target "${{ github.sha }}"
           fi
 
@@ -279,15 +280,17 @@ jobs:
           LATEST_NOTES="Latest automated OpenWrt A53 builds for official sing-box and sing-box-extended.\n\n**Direct download links:**\n- Official: [sing-box.ipk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box.ipk) | [sing-box.apk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box.apk)\n- Extended: [sing-box-extended.ipk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box-extended.ipk) | [sing-box-extended.apk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box-extended.apk)"
 
           if ! gh release view "$STATIC_TAG" >/dev/null 2>&1; then
-            git tag -f "$STATIC_TAG"
-            git push -f origin "$STATIC_TAG" || true
             gh release create "$STATIC_TAG" \
               "dist/${IPK_NAME}" \
               "dist/${APK_NAME}" \
               --title "Latest OpenWrt A53 Builds" \
               --notes "$(printf '%b' "$LATEST_NOTES")" \
-              --prerelease=false || true
+              --prerelease=false \
+              --latest \
+              --target "${{ github.sha }}"
           else
-            gh release upload "$STATIC_TAG" "dist/${IPK_NAME}" "dist/${APK_NAME}" --clobber || true
-            gh release edit "$STATIC_TAG" --notes "$(printf '%b' "$LATEST_NOTES")" || true
+            gh release upload "$STATIC_TAG" "dist/${IPK_NAME}" "dist/${APK_NAME}" --clobber
+            gh release edit "$STATIC_TAG" \
+              --notes "$(printf '%b' "$LATEST_NOTES")" \
+              --latest
           fi
