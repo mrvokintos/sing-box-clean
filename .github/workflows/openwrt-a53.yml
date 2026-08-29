@@ -262,12 +262,17 @@ jobs:
             gh release edit "$TAG_NAME" --prerelease=false
             gh release upload "$TAG_NAME" "dist/${IPK_NAME}" "dist/${APK_NAME}" --clobber
           else
+            # The tag was fetched directly from upstream and may not exist in
+            # this repository yet. GitHub CLI will not create a release from a
+            # tag that exists only in the runner's local clone.
+            git push origin "refs/tags/${TAG_NAME}:refs/tags/${TAG_NAME}"
             gh release create "$TAG_NAME" \
               "dist/${IPK_NAME}" \
               "dist/${APK_NAME}" \
               --title "$RELEASE_TITLE" \
               --notes "$(printf '%b' "$NOTES")" \
-              --prerelease=false
+              --prerelease=false \
+              --verify-tag
           fi
 
           # 2. Overwrite files in the dedicated 'latest' release
