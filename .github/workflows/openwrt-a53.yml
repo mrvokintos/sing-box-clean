@@ -262,17 +262,16 @@ jobs:
             gh release edit "$TAG_NAME" --prerelease=false
             gh release upload "$TAG_NAME" "dist/${IPK_NAME}" "dist/${APK_NAME}" --clobber
           else
-            # The tag was fetched directly from upstream and may not exist in
-            # this repository yet. GitHub CLI will not create a release from a
-            # tag that exists only in the runner's local clone.
-            git push origin "refs/tags/${TAG_NAME}:refs/tags/${TAG_NAME}"
+            # Create the release tag on the orchestrator commit. Pushing the
+            # fetched upstream tag is rejected when its history contains
+            # workflow files that GITHUB_TOKEN is not allowed to introduce.
             gh release create "$TAG_NAME" \
               "dist/${IPK_NAME}" \
               "dist/${APK_NAME}" \
               --title "$RELEASE_TITLE" \
               --notes "$(printf '%b' "$NOTES")" \
               --prerelease=false \
-              --verify-tag
+              --target "${{ github.sha }}"
           fi
 
           # 2. Overwrite files in the dedicated 'latest' release
