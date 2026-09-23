@@ -35,12 +35,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: "~1.26.0"
           cache: false
@@ -119,7 +119,7 @@ jobs:
 
       - name: Cache Go modules
         if: steps.resolve_tag.outputs.should_build == 'true'
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: ~/go/pkg/mod
           key: go-mod-linux-${{ hashFiles('go.sum') }}
@@ -127,7 +127,7 @@ jobs:
 
       - name: Cache Go tool builds
         if: steps.resolve_tag.outputs.should_build == 'true'
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: ~/.cache/go-build
           key: go-build-tools-linux-${{ hashFiles('go.sum') }}
@@ -156,7 +156,7 @@ jobs:
       - name: Cache Chromium toolchain
         if: steps.resolve_tag.outputs.should_build == 'true'
         id: cache-chromium-toolchain
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/cronet-go/naiveproxy/src/third_party/llvm-build/
@@ -247,7 +247,7 @@ jobs:
 
       - name: Upload Artifacts
         if: steps.resolve_tag.outputs.should_build == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: sing-box-openwrt-a53-${{ env.TAG_NAME }}
           path: dist/*

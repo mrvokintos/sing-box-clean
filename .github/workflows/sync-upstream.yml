@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Orchestrator Branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           token: ${{ secrets.MIRROR_TOKEN || secrets.GITHUB_TOKEN }}
@@ -141,9 +141,10 @@ jobs:
       - name: Trigger Official Build
         if: >-
           always() &&
+          steps.sync_official.outputs.latest_tag != '' &&
           (steps.sync_official.outputs.has_new_tag == 'true' ||
-          (github.event_name == 'workflow_dispatch' && inputs.trigger_build_latest &&
-          steps.sync_official.outputs.latest_tag != ''))
+          github.event_name == 'push' ||
+          (github.event_name == 'workflow_dispatch' && inputs.trigger_build_latest))
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ steps.sync_official.outputs.latest_tag }}
@@ -158,9 +159,10 @@ jobs:
       - name: Trigger Extended Build
         if: >-
           always() &&
+          steps.sync_extended.outputs.latest_tag != '' &&
           (steps.sync_extended.outputs.has_new_tag == 'true' ||
-          (github.event_name == 'workflow_dispatch' && inputs.trigger_build_latest &&
-          steps.sync_extended.outputs.latest_tag != ''))
+          github.event_name == 'push' ||
+          (github.event_name == 'workflow_dispatch' && inputs.trigger_build_latest))
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ steps.sync_extended.outputs.latest_tag }}
