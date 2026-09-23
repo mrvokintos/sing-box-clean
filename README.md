@@ -42,3 +42,5 @@ Automated builds of **sing-box** (Official) and **sing-box-extended** for **Open
 * `clean` (**Default branch**) — orchestrator branch containing build scripts, synchronization workflows, and documentation.
 * `testing` — 1:1 pure mirror of upstream `sagernet/sing-box:testing`.
 * `extended` — 1:1 pure mirror of upstream `Shtorm-7/sing-box-extended:extended`.
+
+To update the mirror branches, add a repository Actions secret named `MIRROR_TOKEN` with Contents and Workflows write access. Upstream commits change workflow files, which the built-in `GITHUB_TOKEN` cannot mirror. Without this secret, stable release discovery and OpenWrt builds continue, while mirror updates are skipped with a warning.
