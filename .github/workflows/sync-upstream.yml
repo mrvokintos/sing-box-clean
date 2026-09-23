@@ -16,7 +16,7 @@ on:
         type: boolean
         default: true
       trigger_build_latest:
-        description: "Trigger build for latest stable tags even if no new tags found"
+        description: "Rebuild the latest stable releases even if they already exist"
         required: true
         type: boolean
         default: false
@@ -47,104 +47,112 @@ jobs:
 
       - name: Sync Official sing-box
         id: sync_official
-        if: inputs.sync_official != false
+        if: github.event_name == 'schedule' || inputs.sync_official
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -xeuo pipefail
-          EXISTING_TAGS=$(git tag -l)
+          set -euo pipefail
 
-          git remote add upstream-official https://github.com/sagernet/sing-box.git || git remote set-url upstream-official https://github.com/sagernet/sing-box.git
-          git fetch upstream-official --tags
-          git fetch upstream-official testing
+          UPSTREAM_REPO="SagerNet/sing-box"
+          UPSTREAM_URL="https://github.com/${UPSTREAM_REPO}.git"
 
-          NEW_OFFICIAL_TAGS=()
-          for tag in $(git tag -l "v*"); do
-            # Filter strictly for stable tags: e.g. v1.13.9 (exclude -extended, -alpha, -beta, -rc, -dev, -pre)
-            if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && ! echo "$EXISTING_TAGS" | grep -qx "$tag"; then
-              NEW_OFFICIAL_TAGS+=("$tag")
-            fi
-          done
+          git remote add upstream-official "$UPSTREAM_URL" 2>/dev/null || \
+            git remote set-url upstream-official "$UPSTREAM_URL"
+          git fetch --no-tags origin \
+            "+refs/heads/testing:refs/remotes/origin/testing"
+          git fetch --no-tags upstream-official \
+            "+refs/heads/testing:refs/remotes/upstream-official/testing"
+          EXPECTED_SHA=$(git rev-parse refs/remotes/origin/testing)
+          git push \
+            --force-with-lease="refs/heads/testing:${EXPECTED_SHA}" \
+            origin \
+            "refs/remotes/upstream-official/testing:refs/heads/testing"
 
-          # Fast-forward push testing branch without any local merge commits
-          git push origin upstream-official/testing:refs/heads/testing || true
-          git push origin --tags || true
+          LATEST_TAG=$(gh api "repos/${UPSTREAM_REPO}/releases/latest" --jq '.tag_name')
+          if [[ ! "$LATEST_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Unexpected official stable tag: $LATEST_TAG"
+            exit 1
+          fi
 
-          echo "New official stable tags count: ${#NEW_OFFICIAL_TAGS[@]}"
-          if [ "${#NEW_OFFICIAL_TAGS[@]}" -gt 0 ]; then
-            echo "new_tags=${NEW_OFFICIAL_TAGS[*]}" >> "$GITHUB_OUTPUT"
-            echo "has_new_tags=true" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
+          if gh release view "$LATEST_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "has_new_tag=false" >> "$GITHUB_OUTPUT"
+            echo "Official release $LATEST_TAG is already built."
           else
-            echo "has_new_tags=false" >> "$GITHUB_OUTPUT"
+            echo "has_new_tag=true" >> "$GITHUB_OUTPUT"
+            echo "New official stable release: $LATEST_TAG"
           fi
 
       - name: Sync sing-box-extended
         id: sync_extended
-        if: inputs.sync_extended != false
+        if: >-
+          always() &&
+          (github.event_name == 'schedule' || inputs.sync_extended)
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -xeuo pipefail
-          EXISTING_TAGS=$(git tag -l)
+          set -euo pipefail
 
-          git remote add upstream-extended https://github.com/Shtorm-7/sing-box-extended.git || git remote set-url upstream-extended https://github.com/Shtorm-7/sing-box-extended.git
-          git fetch upstream-extended --tags
-          git fetch upstream-extended extended
+          UPSTREAM_REPO="Shtorm-7/sing-box-extended"
+          UPSTREAM_URL="https://github.com/${UPSTREAM_REPO}.git"
 
-          NEW_EXTENDED_TAGS=()
-          for tag in $(git tag -l "v*extended*"); do
-            # Filter strictly for stable tags: e.g. v1.13.18-extended-2.6.5 (exclude -rc, -alpha, -beta, -pre)
-            if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-extended-[0-9]+\.[0-9]+\.[0-9]+$ ]] && ! echo "$EXISTING_TAGS" | grep -qx "$tag"; then
-              NEW_EXTENDED_TAGS+=("$tag")
-            fi
-          done
+          git remote add upstream-extended "$UPSTREAM_URL" 2>/dev/null || \
+            git remote set-url upstream-extended "$UPSTREAM_URL"
+          git fetch --no-tags origin \
+            "+refs/heads/extended:refs/remotes/origin/extended"
+          git fetch --no-tags upstream-extended \
+            "+refs/heads/extended:refs/remotes/upstream-extended/extended"
+          EXPECTED_SHA=$(git rev-parse refs/remotes/origin/extended)
+          git push \
+            --force-with-lease="refs/heads/extended:${EXPECTED_SHA}" \
+            origin \
+            "refs/remotes/upstream-extended/extended:refs/heads/extended"
 
-          # Fast-forward push extended branch without any local merge commits
-          git push origin upstream-extended/extended:refs/heads/extended || true
-          git push origin --tags || true
+          LATEST_TAG=$(gh api "repos/${UPSTREAM_REPO}/releases/latest" --jq '.tag_name')
+          if [[ ! "$LATEST_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-extended-[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Unexpected extended stable tag: $LATEST_TAG"
+            exit 1
+          fi
 
-          echo "New extended stable tags count: ${#NEW_EXTENDED_TAGS[@]}"
-          if [ "${#NEW_EXTENDED_TAGS[@]}" -gt 0 ]; then
-            echo "new_tags=${NEW_EXTENDED_TAGS[*]}" >> "$GITHUB_OUTPUT"
-            echo "has_new_tags=true" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
+          if gh release view "$LATEST_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "has_new_tag=false" >> "$GITHUB_OUTPUT"
+            echo "Extended release $LATEST_TAG is already built."
           else
-            echo "has_new_tags=false" >> "$GITHUB_OUTPUT"
+            echo "has_new_tag=true" >> "$GITHUB_OUTPUT"
+            echo "New extended stable release: $LATEST_TAG"
           fi
 
-      - name: Trigger Builds for New Official Tags
-        if: steps.sync_official.outputs.has_new_tags == 'true' || inputs.trigger_build_latest
+      - name: Trigger Official Build
+        if: >-
+          always() &&
+          (steps.sync_official.outputs.has_new_tag == 'true' ||
+          (github.event_name == 'workflow_dispatch' && inputs.trigger_build_latest &&
+          steps.sync_official.outputs.latest_tag != ''))
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.sync_official.outputs.latest_tag }}
         run: |
-          set -xeuo pipefail
-          if [ "${{ steps.sync_official.outputs.has_new_tags }}" = "true" ]; then
-            for tag in ${{ steps.sync_official.outputs.new_tags }}; do
-              echo "Triggering Official build for new stable tag: $tag"
-              gh workflow run openwrt-a53.yml --ref clean -f tag="$tag" -f type=official || true
-            done
-          elif [ "${{ inputs.trigger_build_latest }}" = "true" ]; then
-            LATEST_OFFICIAL_TAG=$(git tag -l "v*" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
-            if [ -n "$LATEST_OFFICIAL_TAG" ]; then
-              echo "Triggering Official build for latest stable tag: $LATEST_OFFICIAL_TAG"
-              gh workflow run openwrt-a53.yml --ref clean -f tag="$LATEST_OFFICIAL_TAG" -f type=official || true
-            fi
-          fi
+          set -euo pipefail
+          echo "Triggering official build for $TAG_NAME"
+          gh workflow run openwrt-a53.yml \
+            --ref clean \
+            -f tag="$TAG_NAME" \
+            -f type=official
 
-      - name: Trigger Builds for New Extended Tags
-        if: steps.sync_extended.outputs.has_new_tags == 'true' || inputs.trigger_build_latest
+      - name: Trigger Extended Build
+        if: >-
+          always() &&
+          (steps.sync_extended.outputs.has_new_tag == 'true' ||
+          (github.event_name == 'workflow_dispatch' && inputs.trigger_build_latest &&
+          steps.sync_extended.outputs.latest_tag != ''))
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.sync_extended.outputs.latest_tag }}
         run: |
-          set -xeuo pipefail
-          if [ "${{ steps.sync_extended.outputs.has_new_tags }}" = "true" ]; then
-            for tag in ${{ steps.sync_extended.outputs.new_tags }}; do
-              echo "Triggering Extended build for new stable tag: $tag"
-              gh workflow run openwrt-a53.yml --ref clean -f tag="$tag" -f type=extended || true
-            done
-          elif [ "${{ inputs.trigger_build_latest }}" = "true" ]; then
-            LATEST_EXTENDED_TAG=$(git tag -l "v*extended*" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-extended-[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
-            if [ -n "$LATEST_EXTENDED_TAG" ]; then
-              echo "Triggering Extended build for latest stable tag: $LATEST_EXTENDED_TAG"
-              gh workflow run openwrt-a53.yml --ref clean -f tag="$LATEST_EXTENDED_TAG" -f type=extended || true
-            fi
-          fi
+          set -euo pipefail
+          echo "Triggering extended build for $TAG_NAME"
+          gh workflow run openwrt-a53.yml \
+            --ref clean \
+            -f tag="$TAG_NAME" \
+            -f type=extended

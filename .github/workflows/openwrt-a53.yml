@@ -42,17 +42,19 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.26.6
+          go-version: "~1.26.0"
           cache: false
 
       - name: Resolve Tag and Checkout
         id: resolve_tag
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_TYPE: ${{ inputs.type }}
         run: |
-          set -xeuo pipefail
+          set -euo pipefail
 
-          TAG_NAME="${{ inputs.tag }}"
+          TAG_NAME="$INPUT_TAG"
           if [[ "$TAG_NAME" != v* ]]; then
             TAG_NAME="v${TAG_NAME}"
           fi
@@ -60,7 +62,7 @@ jobs:
           VERSION="${TAG_NAME#v}"
           PKG_VERSION="${VERSION//-/\~}"
 
-          CORE_TYPE="${{ inputs.type }}"
+          CORE_TYPE="$INPUT_TYPE"
           if [ "$CORE_TYPE" = "auto" ] || [ -z "$CORE_TYPE" ]; then
             if [[ "$TAG_NAME" == *extended* ]]; then
               CORE_TYPE="extended"
@@ -77,31 +79,43 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "PKG_VERSION=${PKG_VERSION}" >> "$GITHUB_ENV"
 
-          if [ "$CORE_TYPE" = "extended" ]; then
-            UPSTREAM_REPO="Shtorm-7/sing-box-extended"
-            git fetch --tags https://github.com/Shtorm-7/sing-box-extended.git
-          else
-            UPSTREAM_REPO="sagernet/sing-box"
-            git fetch --tags https://github.com/sagernet/sing-box.git
-          fi
-
-          IS_PRERELEASE="false"
-          UPSTREAM_JSON=$(gh api "repos/${UPSTREAM_REPO}/releases/tags/${TAG_NAME}" 2>/dev/null || true)
-          if [ -n "$UPSTREAM_JSON" ]; then
-            IS_PRERELEASE=$(echo "$UPSTREAM_JSON" | jq -r '.prerelease // false')
-          fi
-
-          if [[ "$TAG_NAME" =~ -(alpha|beta|rc|dev|pre) ]]; then
-            IS_PRERELEASE="true"
-          fi
-
-          if [ "$IS_PRERELEASE" = "true" ]; then
-            echo "::warning::Tag $TAG_NAME is a pre-release (alpha/beta/rc). Skipping build because only stable releases are built."
+          if [[ "$TAG_NAME" =~ -(alpha|beta|rc|dev|pre)(\.|-)[0-9A-Za-z.-]*$ ]]; then
+            echo "::warning::Tag $TAG_NAME is a pre-release. Only stable releases are built."
             echo "should_build=false" >> "$GITHUB_OUTPUT"
-          else
-            git checkout "refs/tags/${TAG_NAME}" || git checkout "${TAG_NAME}"
-            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+
+          if [ "$CORE_TYPE" = "extended" ]; then
+            if [[ ! "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-extended-[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::Invalid extended stable tag: $TAG_NAME"
+              exit 1
+            fi
+            UPSTREAM_REPO="Shtorm-7/sing-box-extended"
+            UPSTREAM_URL="https://github.com/Shtorm-7/sing-box-extended.git"
+          else
+            if [[ ! "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::Invalid official stable tag: $TAG_NAME"
+              exit 1
+            fi
+            UPSTREAM_REPO="sagernet/sing-box"
+            UPSTREAM_URL="https://github.com/sagernet/sing-box.git"
+          fi
+
+          IS_PRERELEASE=$(gh api \
+            "repos/${UPSTREAM_REPO}/releases/tags/${TAG_NAME}" \
+            --jq '.prerelease')
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            echo "::warning::Upstream marks $TAG_NAME as a pre-release. Skipping it."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Fetch the source tag only into FETCH_HEAD. Release tags in this
+          # repository point at the orchestrator branch, so importing upstream
+          # tags into refs/tags would cause collisions on the next sync.
+          git fetch --no-tags --depth=1 "$UPSTREAM_URL" "refs/tags/${TAG_NAME}"
+          git checkout --detach FETCH_HEAD
+          echo "should_build=true" >> "$GITHUB_OUTPUT"
 
       - name: Cache Go modules
         if: steps.resolve_tag.outputs.should_build == 'true'
@@ -249,12 +263,12 @@ jobs:
             IPK_NAME="sing-box-extended.ipk"
             APK_NAME="sing-box-extended.apk"
             RELEASE_TITLE="sing-box-extended ${VERSION}"
-            NOTES="Automated build of sing-box-extended for OpenWrt (ARM64 Cortex-A53).\n\n**Upstream Tag:** \`${TAG_NAME}\` (Stable)\n**Protocols & Features:** NaiveProxy, Hysteria 2, Full VLESS (with REALITY & uTLS), XHTTP.\n**Build Tags:** \`with_quic,with_utls,with_naive_outbound,badlinkname,tfogo_checklinkname0\`\n\n**Permanent direct download links:**\n- [sing-box-extended.ipk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box-extended.ipk)\n- [sing-box-extended.apk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box-extended.apk)"
+            NOTES="Automated build of sing-box-extended for OpenWrt (ARM64 Cortex-A53).\n\n**Upstream Tag:** \`${TAG_NAME}\` (Stable)\n**Protocols & Features:** NaiveProxy, Hysteria 2, Full VLESS (with REALITY & uTLS), XHTTP.\n**Build Tags:** \`with_quic,with_utls,with_naive_outbound,badlinkname,tfogo_checklinkname0,with_musl\`\n\n**Permanent direct download links:**\n- [sing-box-extended.ipk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box-extended.ipk)\n- [sing-box-extended.apk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box-extended.apk)"
           else
             IPK_NAME="sing-box.ipk"
             APK_NAME="sing-box.apk"
             RELEASE_TITLE="sing-box ${VERSION}"
-            NOTES="Automated build of sing-box (Official) for OpenWrt (ARM64 Cortex-A53).\n\n**Upstream Tag:** \`${TAG_NAME}\` (Stable)\n**Build Tags:** \`with_quic,with_naive_outbound,badlinkname,tfogo_checklinkname0\`\n\n**Permanent direct download links:**\n- [sing-box.ipk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box.ipk)\n- [sing-box.apk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box.apk)"
+            NOTES="Automated build of sing-box (Official) for OpenWrt (ARM64 Cortex-A53).\n\n**Upstream Tag:** \`${TAG_NAME}\` (Stable)\n**Build Tags:** \`with_quic,with_naive_outbound,badlinkname,tfogo_checklinkname0,with_musl\`\n\n**Permanent direct download links:**\n- [sing-box.ipk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box.ipk)\n- [sing-box.apk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box.apk)"
           fi
 
           # 1. Create or update ONLY the 2 files for the version release
