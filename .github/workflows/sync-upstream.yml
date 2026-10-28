@@ -104,13 +104,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ steps.sync_official.outputs.latest_tag }}
+          OVERWRITE: ${{ (github.event_name == 'workflow_dispatch' && inputs.trigger_build_latest) && 'true' || 'false' }}
         run: |
           set -euo pipefail
-          echo "Triggering official build for $TAG_NAME"
+          echo "Triggering official build for $TAG_NAME (overwrite=$OVERWRITE)"
           gh workflow run openwrt-a53.yml \
             --ref clean \
             -f tag="$TAG_NAME" \
-            -f type=official
+            -f type=official \
+            -f overwrite_release="$OVERWRITE"
 
       - name: Trigger Extended Build
         if: >-
@@ -122,10 +124,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ steps.sync_extended.outputs.latest_tag }}
+          OVERWRITE: ${{ (github.event_name == 'workflow_dispatch' && inputs.trigger_build_latest) && 'true' || 'false' }}
         run: |
           set -euo pipefail
-          echo "Triggering extended build for $TAG_NAME"
+          echo "Triggering extended build for $TAG_NAME (overwrite=$OVERWRITE)"
           gh workflow run openwrt-a53.yml \
             --ref clean \
             -f tag="$TAG_NAME" \
-            -f type=extended
+            -f type=extended \
+            -f overwrite_release="$OVERWRITE"

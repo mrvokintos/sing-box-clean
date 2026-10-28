@@ -17,6 +17,8 @@
 | **Official sing-box** | [sing-box.ipk](https://github.com/mrvokintos/sing-box-clean/releases/download/latest/sing-box.ipk) | [sing-box.apk](https://github.com/mrvokintos/sing-box-clean/releases/download/latest/sing-box.apk) |
 | **sing-box-extended** | [sing-box-extended.ipk](https://github.com/mrvokintos/sing-box-clean/releases/download/latest/sing-box-extended.ipk) | [sing-box-extended.apk](https://github.com/mrvokintos/sing-box-clean/releases/download/latest/sing-box-extended.apk) |
 
+* Контрольные суммы: [SHA256SUMS](https://github.com/mrvokintos/sing-box-clean/releases/download/latest/SHA256SUMS)
+
 ---
 
 ## Состав протоколов и тегов сборки

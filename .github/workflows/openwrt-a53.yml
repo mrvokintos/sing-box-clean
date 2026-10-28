@@ -21,6 +21,11 @@ on:
         required: true
         type: boolean
         default: true
+      overwrite_release:
+        description: "Overwrite existing version release if it already exists"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: openwrt-a53-${{ inputs.tag }}
@@ -51,6 +56,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           INPUT_TAG: ${{ inputs.tag }}
           INPUT_TYPE: ${{ inputs.type }}
+          INPUT_CREATE_RELEASE: ${{ inputs.create_release }}
+          INPUT_OVERWRITE_RELEASE: ${{ inputs.overwrite_release }}
         run: |
           set -euo pipefail
 
@@ -78,6 +85,20 @@ jobs:
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "PKG_VERSION=${PKG_VERSION}" >> "$GITHUB_ENV"
+
+          OVERWRITE_RELEASE="${INPUT_OVERWRITE_RELEASE:-false}"
+          CREATE_RELEASE="${INPUT_CREATE_RELEASE:-true}"
+          echo "OVERWRITE_RELEASE=${OVERWRITE_RELEASE}" >> "$GITHUB_ENV"
+          echo "overwrite_release=${OVERWRITE_RELEASE}" >> "$GITHUB_OUTPUT"
+
+          if [ "$CREATE_RELEASE" = "true" ] && gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            if [ "$OVERWRITE_RELEASE" != "true" ]; then
+              echo "::notice::Release $TAG_NAME already exists and overwrite_release is false. Skipping build."
+              echo "should_build=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::warning::Release $TAG_NAME already exists, but overwrite_release=true. Will overwrite."
+          fi
 
           if [[ "$TAG_NAME" =~ -(alpha|beta|rc|dev|pre)(\.|-)[0-9A-Za-z.-]*$ ]]; then
             echo "::warning::Tag $TAG_NAME is a pre-release. Only stable releases are built."
@@ -245,6 +266,23 @@ jobs:
 
           rm -f dist/sing-box
 
+      - name: Generate SHA256 Checksums
+        if: steps.resolve_tag.outputs.should_build == 'true'
+        run: |
+          set -euo pipefail
+          if [ "$CORE_TYPE" = "extended" ]; then
+            IPK_NAME="sing-box-extended.ipk"
+            APK_NAME="sing-box-extended.apk"
+          else
+            IPK_NAME="sing-box.ipk"
+            APK_NAME="sing-box.apk"
+          fi
+          (
+            cd dist
+            sha256sum "$IPK_NAME" "$APK_NAME" > SHA256SUMS
+            cat SHA256SUMS
+          )
+
       - name: Upload Artifacts
         if: steps.resolve_tag.outputs.should_build == 'true'
         uses: actions/upload-artifact@v6
@@ -263,18 +301,30 @@ jobs:
             IPK_NAME="sing-box-extended.ipk"
             APK_NAME="sing-box-extended.apk"
             RELEASE_TITLE="sing-box-extended ${VERSION}"
-            NOTES="Automated build of sing-box-extended for OpenWrt (ARM64 Cortex-A53).\n\n**Upstream Tag:** \`${TAG_NAME}\` (Stable)\n**Protocols & Features:** NaiveProxy, Hysteria 2, Full VLESS (with REALITY & uTLS), XHTTP.\n**Build Tags:** \`with_quic,with_utls,with_naive_outbound,badlinkname,tfogo_checklinkname0,with_musl\`\n\n**Permanent direct download links:**\n- [sing-box-extended.ipk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box-extended.ipk)\n- [sing-box-extended.apk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box-extended.apk)"
+            NOTES="Automated build of sing-box-extended for OpenWrt (ARM64 Cortex-A53).\n\n**Upstream Tag:** \`${TAG_NAME}\` (Stable)\n**Protocols & Features:** NaiveProxy, Hysteria 2, Full VLESS (with REALITY & uTLS), XHTTP.\n**Build Tags:** \`with_quic,with_utls,with_naive_outbound,badlinkname,tfogo_checklinkname0,with_musl\`\n\n**Direct download links:**\n- [sing-box-extended.ipk](https://github.com/${{ github.repository }}/releases/download/${TAG_NAME}/sing-box-extended.ipk)\n- [sing-box-extended.apk](https://github.com/${{ github.repository }}/releases/download/${TAG_NAME}/sing-box-extended.apk)\n- [SHA256SUMS](https://github.com/${{ github.repository }}/releases/download/${TAG_NAME}/SHA256SUMS)"
           else
             IPK_NAME="sing-box.ipk"
             APK_NAME="sing-box.apk"
             RELEASE_TITLE="sing-box ${VERSION}"
-            NOTES="Automated build of sing-box (Official) for OpenWrt (ARM64 Cortex-A53).\n\n**Upstream Tag:** \`${TAG_NAME}\` (Stable)\n**Build Tags:** \`with_quic,with_naive_outbound,badlinkname,tfogo_checklinkname0,with_musl\`\n\n**Permanent direct download links:**\n- [sing-box.ipk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box.ipk)\n- [sing-box.apk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box.apk)"
+            NOTES="Automated build of sing-box (Official) for OpenWrt (ARM64 Cortex-A53).\n\n**Upstream Tag:** \`${TAG_NAME}\` (Stable)\n**Build Tags:** \`with_quic,with_naive_outbound,badlinkname,tfogo_checklinkname0,with_musl\`\n\n**Direct download links:**\n- [sing-box.ipk](https://github.com/${{ github.repository }}/releases/download/${TAG_NAME}/sing-box.ipk)\n- [sing-box.apk](https://github.com/${{ github.repository }}/releases/download/${TAG_NAME}/sing-box.apk)\n- [SHA256SUMS](https://github.com/${{ github.repository }}/releases/download/${TAG_NAME}/SHA256SUMS)"
           fi
 
-          # 1. Create or update ONLY the 2 files for the version release
+          # 1. Create or update files for the version release
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release edit "$TAG_NAME" --prerelease=false
-            gh release upload "$TAG_NAME" "dist/${IPK_NAME}" "dist/${APK_NAME}" --clobber
+            if [ "${OVERWRITE_RELEASE:-false}" = "true" ]; then
+              echo "Overwriting release $TAG_NAME"
+              gh release edit "$TAG_NAME" \
+                --title "$RELEASE_TITLE" \
+                --notes "$(printf '%b' "$NOTES")" \
+                --prerelease=false
+              gh release upload "$TAG_NAME" \
+                "dist/${IPK_NAME}" \
+                "dist/${APK_NAME}" \
+                "dist/SHA256SUMS" \
+                --clobber
+            else
+              echo "::warning::Release $TAG_NAME already exists and overwrite_release is false. Skipping version release update."
+            fi
           else
             # Create the release tag on the orchestrator commit. Pushing the
             # fetched upstream tag is rejected when its history contains
@@ -282,6 +332,7 @@ jobs:
             gh release create "$TAG_NAME" \
               "dist/${IPK_NAME}" \
               "dist/${APK_NAME}" \
+              "dist/SHA256SUMS" \
               --title "$RELEASE_TITLE" \
               --notes "$(printf '%b' "$NOTES")" \
               --prerelease=false \
@@ -291,19 +342,33 @@ jobs:
 
           # 2. Overwrite files in the dedicated 'latest' release
           STATIC_TAG="latest"
-          LATEST_NOTES="Latest automated OpenWrt A53 builds for official sing-box and sing-box-extended.\n\n**Direct download links:**\n- Official: [sing-box.ipk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box.ipk) | [sing-box.apk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box.apk)\n- Extended: [sing-box-extended.ipk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box-extended.ipk) | [sing-box-extended.apk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box-extended.apk)"
+          LATEST_NOTES="Latest automated OpenWrt A53 builds for official sing-box and sing-box-extended.\n\n**Direct download links:**\n- Official: [sing-box.ipk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box.ipk) | [sing-box.apk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box.apk)\n- Extended: [sing-box-extended.ipk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box-extended.ipk) | [sing-box-extended.apk](https://github.com/${{ github.repository }}/releases/download/latest/sing-box-extended.apk)\n- Checksums: [SHA256SUMS](https://github.com/${{ github.repository }}/releases/download/latest/SHA256SUMS)"
+
+          mkdir -p /tmp/latest_checksums
+          if gh release download "$STATIC_TAG" -p "SHA256SUMS" -O /tmp/latest_checksums/SHA256SUMS 2>/dev/null; then
+            grep -v -E "(${IPK_NAME}|${APK_NAME})$" /tmp/latest_checksums/SHA256SUMS > /tmp/latest_checksums/merged.txt || true
+            cat "dist/SHA256SUMS" >> /tmp/latest_checksums/merged.txt
+            cp /tmp/latest_checksums/merged.txt /tmp/latest_checksums/SHA256SUMS
+          else
+            cp "dist/SHA256SUMS" /tmp/latest_checksums/SHA256SUMS
+          fi
 
           if ! gh release view "$STATIC_TAG" >/dev/null 2>&1; then
             gh release create "$STATIC_TAG" \
               "dist/${IPK_NAME}" \
               "dist/${APK_NAME}" \
+              "/tmp/latest_checksums/SHA256SUMS" \
               --title "Latest OpenWrt A53 Builds" \
               --notes "$(printf '%b' "$LATEST_NOTES")" \
               --prerelease=false \
               --latest \
               --target "${{ github.sha }}"
           else
-            gh release upload "$STATIC_TAG" "dist/${IPK_NAME}" "dist/${APK_NAME}" --clobber
+            gh release upload "$STATIC_TAG" \
+              "dist/${IPK_NAME}" \
+              "dist/${APK_NAME}" \
+              "/tmp/latest_checksums/SHA256SUMS" \
+              --clobber
             gh release edit "$STATIC_TAG" \
               --notes "$(printf '%b' "$LATEST_NOTES")" \
               --latest
