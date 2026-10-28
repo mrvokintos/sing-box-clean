@@ -21,12 +21,12 @@
 
 ## Состав протоколов и тегов сборки
 
-### 1. Official sing-box (ветка `testing`)
+### 1. Official sing-box
 * **Апстрим:** [sagernet/sing-box](https://github.com/sagernet/sing-box)
 * **Теги сборки:** `with_quic,with_naive_outbound,badlinkname,tfogo_checklinkname0,with_musl`
 * **Протоколы:** NaiveProxy, Hysteria 2 / QUIC, VLESS, ShadowTLS, WireGuard и др.
 
-### 2. sing-box-extended (ветка `extended`)
+### 2. sing-box-extended
 * **Апстрим:** [Shtorm-7/sing-box-extended](https://github.com/Shtorm-7/sing-box-extended)
 * **Теги сборки:** `with_quic,with_utls,with_naive_outbound,badlinkname,tfogo_checklinkname0,with_musl`
 * **Протоколы и возможности:**
@@ -40,7 +40,3 @@
 ## Структура репозитория
 
 * `clean` (**Основная ветка**) — управляющая ветка со скриптами сборки и автоматической синхронизации.
-* `testing` — 100% чистый зеркальный трек официального репозитория `sagernet/sing-box:testing`.
-* `extended` — 100% чистый зеркальный трек `Shtorm-7/sing-box-extended:extended`.
-
-Для обновления зеркальных веток добавьте секрет Actions `MIRROR_TOKEN` с правами записи Contents и Workflows. Коммиты upstream меняют файлы workflow, поэтому встроенный `GITHUB_TOKEN` не может обновить зеркало. Без этого секрета поиск стабильных релизов и сборки OpenWrt продолжают работать, а обновление зеркал пропускается с предупреждением.

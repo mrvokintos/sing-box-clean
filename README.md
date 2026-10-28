@@ -21,12 +21,12 @@ Automated builds of **sing-box** (Official) and **sing-box-extended** for **Open
 
 ## Build Features and Protocols
 
-### 1. Official sing-box (`testing` branch)
+### 1. Official sing-box
 * **Upstream:** [sagernet/sing-box](https://github.com/sagernet/sing-box)
 * **Build Tags:** `with_quic,with_naive_outbound,badlinkname,tfogo_checklinkname0,with_musl`
 * **Protocols:** NaiveProxy, Hysteria 2 / QUIC, VLESS, ShadowTLS, WireGuard, etc.
 
-### 2. sing-box-extended (`extended` branch)
+### 2. sing-box-extended
 * **Upstream:** [Shtorm-7/sing-box-extended](https://github.com/Shtorm-7/sing-box-extended)
 * **Build Tags:** `with_quic,with_utls,with_naive_outbound,badlinkname,tfogo_checklinkname0,with_musl`
 * **Protocols & Features:**
@@ -40,7 +40,3 @@ Automated builds of **sing-box** (Official) and **sing-box-extended** for **Open
 ## Repository Structure
 
 * `clean` (**Default branch**) — orchestrator branch containing build scripts, synchronization workflows, and documentation.
-* `testing` — 1:1 pure mirror of upstream `sagernet/sing-box:testing`.
-* `extended` — 1:1 pure mirror of upstream `Shtorm-7/sing-box-extended:extended`.
-
-To update the mirror branches, add a repository Actions secret named `MIRROR_TOKEN` with Contents and Workflows write access. Upstream commits change workflow files, which the built-in `GITHUB_TOKEN` cannot mirror. Without this secret, stable release discovery and OpenWrt builds continue, while mirror updates are skipped with a warning.
